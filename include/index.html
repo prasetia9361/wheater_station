@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Robot Config</title>
+    <style>
+        body { font-family: sans-serif; background: #0f172a; color: white; display: flex; justify-content: center; padding: 20px; }
+        .card { background: rgba(30, 41, 59, 0.8); padding: 20px; border-radius: 20px; width: 100%; max-width: 400px; }
+        input { width: 100%; padding: 10px; margin: 5px 0 15px 0; border-radius: 5px; border: none; }
+        button { width: 100%; padding: 12px; background: #00e676; border: none; border-radius: 5px; color: white; font-weight: bold; cursor: pointer; }
+        h1 { text-align: center; color: #00f2fe; }
+        label { color: #94a3b8; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>⚙️ Setting Koneksi</h1>
+        
+        <label>WiFi SSID:</label>
+        <input type="text" id="ssid" placeholder="Nama WiFi">
+        
+        <label>WiFi Password:</label>
+        <input type="password" id="password" placeholder="Password WiFi">
+
+        <label>ID Device:</label>
+        <input type="text" id="ID_Device" placeholder="WS_BATxxx">
+        
+        <button onclick="saveConfig()">SIMPAN & REBOOT</button>
+    </div>
+
+    <script>
+        async function firstInput() {
+            try {
+                var response = await fetch('/firstInput');
+                var config = await response.json();
+                
+                if (config.ssid) {
+                    document.getElementById('ssid').value = config.ssid;
+                    document.getElementById('password').value = config.password;
+                    document.getElementById('ID_Device').value = config.ID_Device;
+                }
+            } catch (error) { console.error('Error config:', error); }
+        }
+
+        function saveConfig() {
+            var ssid = document.getElementById('ssid').value;
+            var pass = document.getElementById('password').value;
+            var ID_Device = document.getElementById('ID_Device').value;
+
+            if(!ssid || !ID_Device) { alert("Data tidak lengkap!"); return; }
+
+            if(confirm("Simpan dan Reboot?")) {
+                var url = `/inputAddress?ssid=${encodeURIComponent(ssid)}&password=${encodeURIComponent(pass)}&ID_Device=${encodeURIComponent(ID_Device)}`;
+                fetch(url).then(res => {
+                    if(res.ok) { alert("Tersimpan! Robot akan restart..."); }
+                    else { alert("Gagal menyimpan."); }
+                });
+            }
+        }
+
+        function detectCaptivePortal() {
+            const ua = navigator.userAgent.toLowerCase();
+            const isAndroid = ua.includes('android');
+            const isChrome = ua.includes('chrome') && !ua.includes('wv');
+        }
+
+        window.onload = function() {
+            firstInput();
+            detectCaptivePortal();
+        };
+    </script>
+</body>
+</html>
