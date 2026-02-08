@@ -119,13 +119,10 @@ void handleMqttCommand();
 void appWifi(void *param);
 void appSensors(void *param);
 
-SemaphoreHandle_t _semaphore;
 SemaphoreHandle_t _sensorDataMutex;
 
 void setup() {
     Serial.begin(115200);
-    _semaphore = xSemaphoreCreateMutex();
-    xSemaphoreGive(_semaphore);
     
     _sensorDataMutex = xSemaphoreCreateMutex();
     xSemaphoreGive(_sensorDataMutex);
@@ -295,11 +292,8 @@ void readSensors() {
 void performOTA(String url) {
     Serial.println("[OTA] Starting Update...");
     
-    // Matikan MQTT loop sementara agar tidak mengganggu download
-    // mqttClient->loop() tidak akan dipanggil selama proses ini
-    
     WiFiClientSecure client;
-    client.setInsecure(); // Gunakan ini jika server OTA menggunakan HTTPS tapi tidak ingin cek sertifikat
+    client.setInsecure();
 
     // Callback progress (opsional)
     httpUpdate.onProgress([](size_t progress, size_t total) {
@@ -423,9 +417,6 @@ void appWifi(void *param) {
             Serial.print(" V | LowBat: ");
             Serial.println(_lowbat ? "YES" : "NO");
             // chargingStatus = _charging;
-            xSemaphoreTake(_semaphore, portMAX_DELAY);
-            lowBatteryStatus = _lowbat;
-            xSemaphoreGive(_semaphore);
             lastBatteryCheck = millis();
         }
 
