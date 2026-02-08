@@ -4,8 +4,10 @@ void clientServer::begin() {
     indexHtml();
     firstInput();      
     wifiCredentials(); 
-    notFound();     
+    notFound();  
+    vTaskDelay(100 / portTICK_PERIOD_MS);
     server.begin();
+    
 }
 
 void clientServer::indexHtml() {
@@ -33,9 +35,9 @@ void clientServer::firstInput() {
         if(_memory->readWifi()) {
             String json = "{\"ssid\":\"" + _memory->getSsid() +
                           "\", \"password\":\"" + _memory->getPass() + 
-                          "\", \"ip\":\"" + _memory->getServerIP() +
+                          /*"\", \"ip\":\"" + _memory->getServerIP() +
                           "\", \"client_ip\":\"" + _memory->getClientIP() +
-                          "\", \"port\":\"" + String(_memory->getServerPort()) +
+                          "\", \"port\":\"" + String(_memory->getServerPort()) +*/
                           "\",\"ID_Device\":\"" + _memory->getID_Device() + "\"}";
             request->send(200, "application/json", json);
         } else {
@@ -46,15 +48,12 @@ void clientServer::firstInput() {
 
 void clientServer::wifiCredentials() {
     server.on("/inputAddress", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        if (request->hasParam("ssid") && request->hasParam("ip")) {
+        if (request->hasParam("ssid") && request->hasParam("ID_Device")) {
             String ssid = request->getParam("ssid")->value();
             String pass = request->getParam("password")->value();
-            String ip = request->getParam("ip")->value();
-            String client_ip = request->getParam("client_ip")->value();
-            String portStr = request->getParam("port")->value();
             String ID_Device = request->getParam("ID_Device")->value();
             
-            if(_memory->writeWifi(ssid, pass, ip, client_ip, portStr.toInt(), ID_Device)) {
+            if(_memory->writeWifi(ssid, pass, ID_Device)) {
                 shouldReboot = true; // Trigger reboot di main loop
                 request->send(200, "application/json", "{\"status\":\"success\"}");
             } else {

@@ -94,7 +94,7 @@ bool storage::readWifi(){
     return true;
 
 }
-bool storage::writeWifi(const String& ssid, const String& pass, const String& serverIP, const String& clientIP, int serverPort, const String& ID_Device) {
+bool storage::writeWifi(const String& ssid, const String& pass, const String& ID_Device) {
     File file = SPIFFS.open("/wifi.json", FILE_WRITE);
     if (!file) {
         Serial.println("- gagal membuka file untuk penulisan");
@@ -104,9 +104,6 @@ bool storage::writeWifi(const String& ssid, const String& pass, const String& se
     JsonDocument doc;
     doc["ssid"] = ssid;
     doc["pass"] = pass;
-    doc["serverIP"] = serverIP;
-    doc["client_ip"] = clientIP; // Placeholder untuk client_ip
-    doc["serverPort"] = serverPort;
     doc["ID_Device"] = ID_Device;
     
     serializeJson(doc, file);
@@ -114,9 +111,6 @@ bool storage::writeWifi(const String& ssid, const String& pass, const String& se
     
     setWifi.ssid = ssid;
     setWifi.pass = pass;
-    setWifi.serverIP = serverIP;
-    setWifi.clientIP = clientIP;
-    setWifi.serverPort = serverPort;
     setWifi.ID_Device = ID_Device;
     
     Serial.println("Data WiFi berhasil disimpan");

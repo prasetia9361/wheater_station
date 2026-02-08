@@ -120,7 +120,7 @@ String NTPSetup::getDateTimeString() {
     }
     
     char dateTimeStr[22];
-    strftime(dateTimeStr, sizeof(dateTimeStr), "%Y-%m-%d %H:%M:%S\n", &timeinfo);
+    strftime(dateTimeStr, sizeof(dateTimeStr), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
     return String(dateTimeStr);
 }
 

@@ -37,6 +37,6 @@ public:
 
     
     bool init();
-    bool writeWifi(const String& ssid, const String& pass, const String& serverIP,const String& clientIP, int serverPort, const String& ID_Device = "");
+    bool writeWifi(const String& ssid, const String& pass, const String& ID_Device);
 };
 #endif
