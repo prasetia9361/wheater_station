@@ -15,6 +15,10 @@
 #include "mqttSetup.h"
 
 #define FRAMEWORK_VERSION "1.2.0"
+#define MQTT_SERVER       "broker.emqx.io"
+#define MQTT_PORT         1883
+#define MQTT_USER         "weather_station"
+#define MQTT_PASSWORD     "your_mqtt_password"
 
 // --- PIN DEFINITIONS ---
 #define SDA_PIN         SDA
@@ -29,7 +33,7 @@
 // RS485 Anemometer (Hardware Serial 2)
 #define RS485_RX        18
 #define RS485_TX        17
-#define RS485_EN        16  // DE/RE Pin
+#define RS485_EN        4  // DE/RE Pin
 
 // Rain Gauge (Hall Effect A3144)
 #define RAIN_PIN        7
@@ -168,7 +172,7 @@ delay(1000);
 // --- INITIALIZATION ---
 void initSensors() {
     Wire.begin(SDA_PIN, SCL_PIN);
-    Serial2.begin(9600, SERIAL_8N1, RS485_RX, RS485_TX);
+    Serial2.begin(4800, SERIAL_8N1, RS485_RX, RS485_TX);
     pinMode(RS485_EN, OUTPUT);
     digitalWrite(RS485_EN, LOW); // Mode Receive
 
@@ -201,25 +205,47 @@ void initSensors() {
 
 // --- READING LOGIC ---
 float readWindSpeed() {
-    digitalWrite(RS485_EN, HIGH); // Mode Transmit
+    digitalWrite(RS485_EN, HIGH); 
+    delayMicroseconds(50); // Stabilisasi
     Serial2.write(windRequest, sizeof(windRequest));
-    Serial2.flush();
-    digitalWrite(RS485_EN, LOW); // Mode Receive
+    Serial2.flush();              
+    delayMicroseconds(500); // JEDA KRUSIAL: Menunggu bit terakhir keluar kabel
+    digitalWrite(RS485_EN, LOW);  
 
-    delay(100);
+    // RECEIVE
+    uint8_t response[20];
+    int bytesRead = 0;
+    unsigned long startTime = millis();
 
-    byte response[7];
-    int i = 0;
-    while (Serial2.available() && i < 7) {
-        response[i++] = Serial2.read();
+    // Tunggu data selama 1 detik
+    while (millis() - startTime < 1000) {
+        if (Serial2.available()) {
+        response[bytesRead++] = Serial2.read();
+        startTime = millis(); // Reset timeout tiap ada byte masuk
+        }
     }
 
-    if (i == 7 && response[0] == 0x01) {
-        // Data speed ada di byte 3 & 4 (Hex to Decimal)
-        int rawSpeed = (response[3] << 8) | response[4];
-        return rawSpeed / 10.0; // Biasanya anemometer mengembalikan nilai speed * 10
+    if (bytesRead > 0) {
+        // Serial.print("HASIL: ");
+        // for (int i = 0; i < bytesRead; i++) {
+        // if (response[i] < 0x10) Serial.print("0");
+        // Serial.print(response[i], HEX);
+        // Serial.print(" ");
+        // }
+        // Serial.println();
+        
+        // Jika respon diawali 01 03, berarti SUKSES
+        if (response[0] == 0x01 && response[1] == 0x03) {
+        int value = (response[3] << 8) | response[4];
+        return value / 10.0; // Konversi ke m/s
+        // Serial.print("DATA TERDETEKSI! Raw Value: ");
+        // Serial.println(value);
+        }
+    } else {
+        Serial.println("TETAP TIDAK ADA RESPON.");
     }
     return 0.0;
+
 }
 
 enum LTR390State {
@@ -235,8 +261,9 @@ LTR390State ltr390State = LTR390_IDLE;
 unsigned long lastModeChange = 0;
 unsigned long lastReadTimeLux = 0;
 unsigned long lastReadTimeUV = 0;
-float _lux = 0.0;
+float _lux = 0.00;
 int _uvIndex = 0;
+float _windSpeed = 0.00;
 bool switchToLux = false;
 
 void readSensors() {
@@ -262,6 +289,8 @@ void readSensors() {
             switchToLux = false;
         }
     }
+
+    _windSpeed = readWindSpeed();
     
     if (xSemaphoreTake(_sensorDataMutex, portMAX_DELAY)) {
         currentSensorData.temperature_in = bme.readTemperature();
@@ -271,7 +300,7 @@ void readSensors() {
         uint16_t rtd = max31865.readRTD();
         currentSensorData.temperature_out = max31865.temperature(RNOMINAL, RREF);
 
-        currentSensorData.windSpeed = readWindSpeed();
+        currentSensorData.windSpeed = _windSpeed;
 
         currentSensorData.rainfall = rainTips * RAIN_FACTOR;
 
@@ -412,10 +441,10 @@ void appWifi(void *param) {
             // _charging = (batteryVoltage > CHARGE_THRESHOLD_VOLT);
             _lowbat = (currentSensorData.batteryVoltage < LOW_BAT_THRESHOLD);
 
-            Serial.print("[BATTERY] Voltage: ");
-            Serial.print(currentSensorData.batteryVoltage);
-            Serial.print(" V | LowBat: ");
-            Serial.println(_lowbat ? "YES" : "NO");
+            // Serial.print("[BATTERY] Voltage: ");
+            // Serial.print(currentSensorData.batteryVoltage);
+            // Serial.print(" V | LowBat: ");
+            // Serial.println(_lowbat ? "YES" : "NO");
             // chargingStatus = _charging;
             lastBatteryCheck = millis();
         }
@@ -457,8 +486,8 @@ void appWifi(void *param) {
                 
                 // Connect to MQTT broker
                 if (!mqttClient->isConnected()) {
-                    mqttClient->begin("broker.emqx.io", 1883,
-                                        "weather_station", "your_mqtt_password",
+                    mqttClient->begin(MQTT_SERVER, MQTT_PORT,
+                                        MQTT_USER, MQTT_PASSWORD,
                                         memory->getID_Device());
                     mqttClient->connect();
                     mqttClient->publishStatus(
@@ -546,10 +575,10 @@ void appSensors(void *param) {
     const unsigned long readInterval = 5000; 
 
     while (true) {
-        if (millis() - lastRead >= readInterval) {
-            readSensors();
-            lastRead = millis();
-        }
+        // if (millis() - lastRead >= readInterval) {
+        readSensors();
+        //     lastRead = millis();
+        // }
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }

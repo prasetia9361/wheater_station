@@ -95,8 +95,8 @@ bool MQTTSetup::publishSensorData(float temperatureIn, float temperatureOut, flo
     
     doc["station_id"] = station_id;
     doc["timestamp"] = timestamp;
-    doc["temperature_in"] = serialized(String(temperatureIn, 2));
-    doc["temperature_out"] = serialized(String(temperatureOut, 2));
+    doc["temp_in"] = serialized(String(temperatureIn, 2));
+    doc["temp_out"] = serialized(String(temperatureOut, 2));
     doc["humidity"] = serialized(String(humidity, 2));
     doc["pressure"] = serialized(String(pressure, 2));
     
@@ -105,7 +105,7 @@ bool MQTTSetup::publishSensorData(float temperatureIn, float temperatureOut, flo
     if (rainfall > 0) doc["rainfall"] = serialized(String(rainfall, 2));
     if (uvIndex > 0) doc["uv_index"] = uvIndex;
     if (lux > 0) doc["lux"] = serialized(String(lux, 2));
-    if (batteryVoltage > 0) doc["battery_voltage"] = serialized(String(batteryVoltage, 2));
+    if (batteryVoltage > 0) doc["voltage"] = serialized(String(batteryVoltage, 2));
     if (signalStrength != 0) doc["signal_strength"] = signalStrength;
     
     String topic = "weather/" + station_id + "/data";
