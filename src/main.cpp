@@ -38,14 +38,36 @@
 // Rain Gauge (Hall Effect A3144)
 #define RAIN_PIN        7
 
-#define RREF      4300.0    // PT100 (430 for 3wire, 4300 for PT1000)
-#define RNOMINAL  1000.0    // 100 for PT100, 1000 for PT1000
+// Battery Voltage Measurement
+#define BATTERY_PIN    2  // GPIO 2 ADC1_CH1 (47k & 10k Divider)
 
-#define BAT_VOLT_PIN    2  // ADC1_CH1 (47k & 10k Divider)
+// Push Button
+#define BUTTON_RESET   42  // GPIO 42
+
+#define BUTTON_ENABLE_AP 41 // GPIO 41
+
+#define BUTTON_MAINTENANCE 40 // GPIO 40
+
+#define LED_AP 21 // GPIO 21
+
+// --- PT100 Constants ---
+#define RREF      430.0    // PT100 (430 for 3wire, 4300 for PT1000)
+#define RNOMINAL  100.0    // 100 for PT100, 1000 for PT1000
 
 // Safety Thresholds
 #define CHARGE_THRESHOLD_VOLT   12.7 // LiFePO4 Charging
 #define LOW_BAT_THRESHOLD       11.1 // LiFePO4 Critical Low
+
+const float R1 = 47000.0;   // 47k
+const float R2 = 10000.0;   // 10k
+
+// Faktor Kalibrasi
+// Ubah nilai ini jika pembacaan serial monitor berbeda dengan Multimeter
+// Jika di serial 12.5V tapi di multimeter 12.8V, naikkan sedikit.
+const float calibrationFactor = 1.0625; 
+  long totalMilliVolts = 0;
+  int sampleCount = 20;
+  int counterSample = 0;
 
 // NTP Server Configuration
 #define NTP_TIMEZONE "WIB-7"
@@ -66,7 +88,8 @@ bool isLowBatReturn = false;
 enum wifiCindition {
     WIFI_DISCONNECTED,
     WIFI_STACONNECTED,
-    WIFI_APCONNECTED
+    WIFI_APCONNECTED,
+    MAINTENANCE_MODE
 };
 
 wifiCindition wifiStatus = WIFI_DISCONNECTED;
@@ -131,8 +154,20 @@ void setup() {
     _sensorDataMutex = xSemaphoreCreateMutex();
     xSemaphoreGive(_sensorDataMutex);
 
+    wifiSetup = new WifiSetup();
+    memory = new storage();
+    webServer = new clientServer(memory);
+    ntpSetup = new NTPSetup(NTP_TIMEZONE, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
+    mqttClient = new MQTTSetup();
+
     analogReadResolution(12); // 0 - 4095
-    pinMode(BAT_VOLT_PIN, INPUT);
+    analogSetAttenuation(ADC_11db);
+    pinMode(BATTERY_PIN, INPUT);
+    pinMode(BUTTON_RESET, INPUT_PULLUP);
+    pinMode(BUTTON_ENABLE_AP, INPUT_PULLUP);
+    pinMode(BUTTON_MAINTENANCE, INPUT_PULLUP);
+    pinMode(LED_AP, OUTPUT);
+    digitalWrite(LED_AP, LOW);
     
     // Wire.begin(SDA_PIN, SCL_PIN);
     initSensors();
@@ -182,7 +217,7 @@ void initSensors() {
     }
 
     // 2. Init MAX31865 (2-wire PT1000)
-    max31865.begin(MAX31865_2WIRE); 
+    max31865.begin(MAX31865_3WIRE); 
 
     // 3. Init LTR390
     if (!ltr.begin()) {
@@ -265,6 +300,7 @@ float _lux = 0.00;
 int _uvIndex = 0;
 float _windSpeed = 0.00;
 bool switchToLux = false;
+unsigned long lastRead = 0;
 
 void readSensors() {
     unsigned long currentTime = millis();
@@ -291,30 +327,58 @@ void readSensors() {
     }
 
     _windSpeed = readWindSpeed();
-    
-    if (xSemaphoreTake(_sensorDataMutex, portMAX_DELAY)) {
-        currentSensorData.temperature_in = bme.readTemperature();
-        currentSensorData.humidity = bme.readHumidity();
-        currentSensorData.pressure = bme.readPressure() / 100.0F;
 
-        uint16_t rtd = max31865.readRTD();
-        currentSensorData.temperature_out = max31865.temperature(RNOMINAL, RREF);
+    if (millis() - lastRead > mqttClient->getPublishInterval() / sampleCount)
+    {
+        if (xSemaphoreTake(_sensorDataMutex, portMAX_DELAY)) {
+            currentSensorData.temperature_in = bme.readTemperature();
+            currentSensorData.humidity = bme.readHumidity();
+            currentSensorData.pressure = bme.readPressure() / 100.0F;
 
-        currentSensorData.windSpeed = _windSpeed;
+            uint16_t rtd = max31865.readRTD();
+            currentSensorData.temperature_out = max31865.temperature(RNOMINAL, RREF);
+              // Check and print any faults
+            uint8_t fault = max31865.readFault();
+            if (fault) {
+                Serial.print("Fault 0x"); Serial.println(fault, HEX);
+                if (fault & MAX31865_FAULT_HIGHTHRESH) {
+                Serial.println("RTD High Threshold"); 
+                }
+                if (fault & MAX31865_FAULT_LOWTHRESH) {
+                Serial.println("RTD Low Threshold"); 
+                }
+                if (fault & MAX31865_FAULT_REFINLOW) {
+                Serial.println("REFIN- > 0.85 x Bias"); 
+                }
+                if (fault & MAX31865_FAULT_REFINHIGH) {
+                Serial.println("REFIN- < 0.85 x Bias - FORCE- open"); 
+                }
+                if (fault & MAX31865_FAULT_RTDINLOW) {
+                Serial.println("RTDIN- < 0.85 x Bias - FORCE- open"); 
+                }
+                if (fault & MAX31865_FAULT_OVUV) {
+                Serial.println("Under/Over voltage"); 
+                }
+                max31865.clearFault();
+            }
 
-        currentSensorData.rainfall = rainTips * RAIN_FACTOR;
+            currentSensorData.windSpeed = _windSpeed;
 
-        currentSensorData.uvIndex = _uvIndex;
-        currentSensorData.lux = _lux;
+            currentSensorData.rainfall = rainTips * RAIN_FACTOR;
 
-        Serial.printf("Temp: %.2f | Wind: %.2f | Rain: %.2f mm | UV: %d | Lux: %.2f\n", 
-                      currentSensorData.temperature_out, 
-                      currentSensorData.windSpeed, 
-                      currentSensorData.rainfall,
-                      currentSensorData.uvIndex,
-                      currentSensorData.lux);
-        
-        xSemaphoreGive(_sensorDataMutex);
+            currentSensorData.uvIndex = _uvIndex;
+            currentSensorData.lux = _lux;
+
+            // Serial.printf("Temp: %.2f | Wind: %.2f | Rain: %.2f mm | UV: %d | Lux: %.2f\n", 
+            //             currentSensorData.temperature_out, 
+            //             currentSensorData.windSpeed, 
+            //             currentSensorData.rainfall,
+            //             currentSensorData.uvIndex,
+            //             currentSensorData.lux);
+            
+            xSemaphoreGive(_sensorDataMutex);
+        }
+        lastRead = millis();
     }
 }
 
@@ -381,11 +445,6 @@ void handleMqttCommand(){
 }
 
 void appWifi(void *param) {
-    wifiSetup = new WifiSetup();
-    memory = new storage();
-    webServer = new clientServer(memory);
-    ntpSetup = new NTPSetup(NTP_TIMEZONE, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
-    mqttClient = new MQTTSetup();
     Serial.println("WiFi Task Started on Core 0");
     // Inisialisasi SPIFFS duluan sebelum akses file
     if (!memory->init()) {
@@ -422,6 +481,7 @@ void appWifi(void *param) {
     // Variabel lokal untuk menampung data snapshot dari global
     bool _charging = false;
     bool _lowbat = false;
+    bool ismaintenance = false;
 
     while (true) {
         if (WiFi.status() != WL_CONNECTED  && WiFi.getMode() == WIFI_STA && wifiSetup->isConnectedAP() == false){
@@ -430,22 +490,19 @@ void appWifi(void *param) {
             wifiStatus = WIFI_STACONNECTED;
         }
         
-
-        if (millis() - lastBatteryCheck > 500) {
-                        
-            float adcMv = analogReadMilliVolts(BAT_VOLT_PIN); 
-            float voltRaw = (adcMv / 1000.0) * VOLTAGE_MULTIPLIER;
-            // static float filteredVolt = 0;
-            if (currentSensorData.batteryVoltage == 0) currentSensorData.batteryVoltage = voltRaw;
-            else currentSensorData.batteryVoltage = (0.1 * voltRaw) + (0.9 * currentSensorData.batteryVoltage);
-            // _charging = (batteryVoltage > CHARGE_THRESHOLD_VOLT);
-            _lowbat = (currentSensorData.batteryVoltage < LOW_BAT_THRESHOLD);
-
-            // Serial.print("[BATTERY] Voltage: ");
-            // Serial.print(currentSensorData.batteryVoltage);
-            // Serial.print(" V | LowBat: ");
-            // Serial.println(_lowbat ? "YES" : "NO");
-            // chargingStatus = _charging;
+        // membaca tegangan baterai sebanyak 20 kali setiap satuan waktu mqtt interval untuk ambil nilai rata rata
+        if (millis() - lastBatteryCheck > mqttClient->getPublishInterval() / sampleCount) {
+            totalMilliVolts += analogReadMilliVolts(BATTERY_PIN);
+            counterSample++;
+            if (counterSample == sampleCount)
+            {
+                float avgMilliVolts = totalMilliVolts / sampleCount;
+                float voltageGPIO = avgMilliVolts / 1000.0; 
+                // Vin = Vout * (R1 + R2) / R2
+                float voltageBattery = voltageGPIO * ((R1 + R2) / R2);
+                currentSensorData.batteryVoltage = voltageBattery * calibrationFactor;
+            }
+            
             lastBatteryCheck = millis();
         }
 
@@ -454,6 +511,7 @@ void appWifi(void *param) {
             case WIFI_DISCONNECTED:
             {
                 Serial.println("WiFi Lost. Reconnecting...");
+                digitalWrite(LED_AP, HIGH);
                 WiFi.disconnect(); 
                 wifiSetup->connectSTA();
                 wifiSetup->setupWiFiSTA(memory->getSsid().c_str(), memory->getPass().c_str());
@@ -502,6 +560,13 @@ void appWifi(void *param) {
                 if (mqttClient->isConnected() && mqttClient->_modeCommand != OTA_UPDATE){
                     if ( millis() - lastMqttPublish > mqttClient->getPublishInterval()){
                         if (xSemaphoreTake(_sensorDataMutex, portMAX_DELAY)) {
+                            Serial.printf("Temp: %.2f | Wind: %.2f | Rain: %.2f mm | UV: %d | Lux: %.2f | battery: %.2f V\n", 
+                                currentSensorData.temperature_out, 
+                                currentSensorData.windSpeed, 
+                                currentSensorData.rainfall,
+                                currentSensorData.uvIndex,
+                                currentSensorData.lux,
+                                currentSensorData.batteryVoltage);
                             mqttClient->publishSensorData(
                                 currentSensorData.temperature_in,
                                 currentSensorData.temperature_out,
@@ -518,7 +583,7 @@ void appWifi(void *param) {
                         }
                         lastMqttPublish = millis();
                     }
-
+                    // Periodic Status Publish setiap 5x publish data
                     if ( millis() - lastMqttPublish > mqttClient->getPublishInterval() * 5){
                         mqttClient->publishStatus(
                             "online",
@@ -560,25 +625,53 @@ void appWifi(void *param) {
                 }
                 break;
             }
+            case MAINTENANCE_MODE:
+            {
+                if (!ismaintenance)
+                {
+                    if (!mqttClient->isConnected()) {
+                        mqttClient->begin(MQTT_SERVER, MQTT_PORT,
+                                            MQTT_USER, MQTT_PASSWORD,
+                                            memory->getID_Device());
+                        mqttClient->connect();
+                        ismaintenance = mqttClient->publishStatus(
+                            "maintenance",
+                            FRAMEWORK_VERSION,
+                            millis() / 1000,
+                            WiFi.localIP().toString(),
+                            ESP.getFreeHeap()
+                        );
+                    }else
+                    {
+                        ismaintenance = mqttClient->publishStatus(
+                            "maintenance",
+                            FRAMEWORK_VERSION,
+                            millis() / 1000,
+                            WiFi.localIP().toString(),
+                            ESP.getFreeHeap()
+                        );
+                    }
+                }
+                
+                break;
+            }
         }
 
         if (WiFi.getMode() == WIFI_AP)
         {
             wifiSetup->loopDns();
         }
+
+        digitalRead(BUTTON_RESET) == LOW ? mqttClient->_modeCommand = RESTART:false;
+        digitalRead(BUTTON_ENABLE_AP) == LOW ? wifiStatus = WIFI_APCONNECTED:false;
+        digitalRead(BUTTON_MAINTENANCE) == LOW ? wifiStatus = MAINTENANCE_MODE:false;
         vTaskDelay(10); 
     }
 }
 
 void appSensors(void *param) {
-    unsigned long lastRead = 0;
-    const unsigned long readInterval = 5000; 
-
     while (true) {
-        // if (millis() - lastRead >= readInterval) {
         readSensors();
-        //     lastRead = millis();
-        // }
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
