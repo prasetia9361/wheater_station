@@ -64,7 +64,7 @@ const float R2 = 10000.0;   // 10k
 // Faktor Kalibrasi
 // Ubah nilai ini jika pembacaan serial monitor berbeda dengan Multimeter
 // Jika di serial 12.5V tapi di multimeter 12.8V, naikkan sedikit.
-const float calibrationFactor = 1.0625; 
+const float calibrationFactor = 0.95377843; 
   long totalMilliVolts = 0;
   int sampleCount = 20;
   int counterSample = 0;
