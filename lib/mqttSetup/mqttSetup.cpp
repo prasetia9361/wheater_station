@@ -232,8 +232,8 @@ void MQTTSetup::handleMessage(char* topic, byte* payload, unsigned int length) {
             _otaRequested = true;
             Serial.println("[MQTT] OTA update command received!");
             Serial.println("[MQTT] URL: " + _otaUrl);
-            _modeCommand = publishStatus("maintenance", "1.2.0", millis()/1000, WiFi.localIP().toString()) ? OTA_UPDATE : NONE;
-            
+            // _modeCommand = publishStatus("maintenance", "1.2.0", millis()/1000, WiFi.localIP().toString()) ? OTA_UPDATE : NONE;
+            _modeCommand = OTA_UPDATE;
         } else {
             Serial.println("[MQTT] OTA Error: firmware_url missing");
         }

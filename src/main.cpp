@@ -109,7 +109,7 @@ MQTTSetup *mqttClient;
 
 // --- RAIN GAUGE VARIABLES ---
 volatile long rainTips = 0;
-const float RAIN_FACTOR = 0.2794; // mm per tip (sesuaikan dengan spesifikasi rain gauge Anda)
+const float RAIN_FACTOR = 14; // mm per tip (sesuaikan dengan spesifikasi rain gauge Anda)
 
 // --- ANEMOMETER RS485 ---
 // Command Modbus standard untuk baca Wind Speed (Address 0x01)
@@ -216,7 +216,7 @@ void initSensors() {
         Serial.println("[SENSOR] BME280 not found!");
     }
 
-    // 2. Init MAX31865 (2-wire PT1000)
+    // 2. Init MAX31865 (3-wire PT100)
     max31865.begin(MAX31865_3WIRE); 
 
     // 3. Init LTR390
@@ -277,7 +277,7 @@ float readWindSpeed() {
         // Serial.println(value);
         }
     } else {
-        Serial.println("TETAP TIDAK ADA RESPON.");
+        // Serial.println("TETAP TIDAK ADA RESPON.");
     }
     return 0.0;
 
@@ -298,12 +298,30 @@ unsigned long lastReadTimeLux = 0;
 unsigned long lastReadTimeUV = 0;
 float _lux = 0.00;
 int _uvIndex = 0;
+float temp = 0.00;
 float _windSpeed = 0.00;
 bool switchToLux = false;
 unsigned long lastRead = 0;
 
 void readSensors() {
     unsigned long currentTime = millis();
+
+    max31865.clearFault(); 
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+
+    uint16_t rtd = max31865.readRTD();
+    uint8_t fault = max31865.readFault();
+
+    if (fault == 0) {
+        temp = max31865.temperature(RNOMINAL, RREF);
+        if (temp > -40.0 && temp < 80.0) {
+            currentSensorData.temperature_out = temp;//0.84
+        }
+    } else {
+        Serial.print("[MAX31865] Fault Detected: 0x"); 
+        Serial.println(fault, HEX);
+        max31865.clearFault();
+    }
 
     if (!switchToLux)
     {
@@ -335,32 +353,7 @@ void readSensors() {
             currentSensorData.humidity = bme.readHumidity();
             currentSensorData.pressure = bme.readPressure() / 100.0F;
 
-            uint16_t rtd = max31865.readRTD();
-            currentSensorData.temperature_out = max31865.temperature(RNOMINAL, RREF);
-              // Check and print any faults
-            uint8_t fault = max31865.readFault();
-            if (fault) {
-                Serial.print("Fault 0x"); Serial.println(fault, HEX);
-                if (fault & MAX31865_FAULT_HIGHTHRESH) {
-                Serial.println("RTD High Threshold"); 
-                }
-                if (fault & MAX31865_FAULT_LOWTHRESH) {
-                Serial.println("RTD Low Threshold"); 
-                }
-                if (fault & MAX31865_FAULT_REFINLOW) {
-                Serial.println("REFIN- > 0.85 x Bias"); 
-                }
-                if (fault & MAX31865_FAULT_REFINHIGH) {
-                Serial.println("REFIN- < 0.85 x Bias - FORCE- open"); 
-                }
-                if (fault & MAX31865_FAULT_RTDINLOW) {
-                Serial.println("RTDIN- < 0.85 x Bias - FORCE- open"); 
-                }
-                if (fault & MAX31865_FAULT_OVUV) {
-                Serial.println("Under/Over voltage"); 
-                }
-                max31865.clearFault();
-            }
+        
 
             currentSensorData.windSpeed = _windSpeed;
 
@@ -369,12 +362,17 @@ void readSensors() {
             currentSensorData.uvIndex = _uvIndex;
             currentSensorData.lux = _lux;
 
-            // Serial.printf("Temp: %.2f | Wind: %.2f | Rain: %.2f mm | UV: %d | Lux: %.2f\n", 
-            //             currentSensorData.temperature_out, 
-            //             currentSensorData.windSpeed, 
-            //             currentSensorData.rainfall,
-            //             currentSensorData.uvIndex,
-            //             currentSensorData.lux);
+            Serial.printf("Temp In: %.2f°C | Temp Out: %.2f°C | Humidity: %.2f%% | Pressure: %.2f hPa | Wind: %.2f m/s | Rain: %.2f ml |rainTips: %d | UV: %d | Lux: %.2f lux | Battery: %.2f V\n", 
+                        currentSensorData.temperature_in,
+                        currentSensorData.temperature_out, 
+                        currentSensorData.humidity,
+                        currentSensorData.pressure,
+                        currentSensorData.windSpeed, 
+                        currentSensorData.rainfall,
+                        rainTips,
+                        currentSensorData.uvIndex,
+                        currentSensorData.lux,
+                        currentSensorData.batteryVoltage);
             
             xSemaphoreGive(_sensorDataMutex);
         }
@@ -431,11 +429,7 @@ void handleMqttCommand(){
             break;
         }
         case OTA_UPDATE:{
-            if (mqttClient->isOTARequested()) {
-                String url = mqttClient->getOTAUrl();
-                mqttClient->clearOTARequest(); // Reset flag agar tidak loop
-                performOTA(url);
-            }
+            wifiStatus = MAINTENANCE_MODE;
             break;
         }
         default:
@@ -482,6 +476,7 @@ void appWifi(void *param) {
     bool _charging = false;
     bool _lowbat = false;
     bool ismaintenance = false;
+    int interval = 0;
 
     while (true) {
         if (WiFi.status() != WL_CONNECTED  && WiFi.getMode() == WIFI_STA && wifiSetup->isConnectedAP() == false){
@@ -491,12 +486,13 @@ void appWifi(void *param) {
         }
         
         // membaca tegangan baterai sebanyak 20 kali setiap satuan waktu mqtt interval untuk ambil nilai rata rata
-        if (millis() - lastBatteryCheck > mqttClient->getPublishInterval() / sampleCount) {
+        interval = mqttClient->getPublishInterval() == 0 ? 60000 : mqttClient->getPublishInterval(); // Default 60 detik jika belum di-set
+        if (millis() - lastBatteryCheck > interval / sampleCount) {
             totalMilliVolts += analogReadMilliVolts(BATTERY_PIN);
             counterSample++;
-            if (counterSample == sampleCount)
+            if (counterSample == 10)
             {
-                float avgMilliVolts = totalMilliVolts / sampleCount;
+                float avgMilliVolts = totalMilliVolts / 10;//sampleCount
                 float voltageGPIO = avgMilliVolts / 1000.0; 
                 // Vin = Vout * (R1 + R2) / R2
                 float voltageBattery = voltageGPIO * ((R1 + R2) / R2);
@@ -511,7 +507,7 @@ void appWifi(void *param) {
             case WIFI_DISCONNECTED:
             {
                 Serial.println("WiFi Lost. Reconnecting...");
-                digitalWrite(LED_AP, HIGH);
+                
                 WiFi.disconnect(); 
                 wifiSetup->connectSTA();
                 wifiSetup->setupWiFiSTA(memory->getSsid().c_str(), memory->getPass().c_str());
@@ -528,6 +524,7 @@ void appWifi(void *param) {
                 break;
             }
             case WIFI_STACONNECTED:{
+                digitalWrite(LED_AP, LOW);
                 // Initialize NTP on first STA connection
                 if (!ntpInitialized && WiFi.status() == WL_CONNECTED) {
                     ntpSetup->setUpdateInterval(3600000);
@@ -558,7 +555,7 @@ void appWifi(void *param) {
                 }
 
                 if (mqttClient->isConnected() && mqttClient->_modeCommand != OTA_UPDATE){
-                    if ( millis() - lastMqttPublish > mqttClient->getPublishInterval()){
+                    if ( millis() - lastMqttPublish >= mqttClient->getPublishInterval()){
                         if (xSemaphoreTake(_sensorDataMutex, portMAX_DELAY)) {
                             Serial.printf("Temp: %.2f | Wind: %.2f | Rain: %.2f mm | UV: %d | Lux: %.2f | battery: %.2f V\n", 
                                 currentSensorData.temperature_out, 
@@ -584,7 +581,7 @@ void appWifi(void *param) {
                         lastMqttPublish = millis();
                     }
                     // Periodic Status Publish setiap 5x publish data
-                    if ( millis() - lastMqttPublish > mqttClient->getPublishInterval() * 5){
+                    if ( millis() - lastStatusPublish >= mqttClient->getPublishInterval() * 5){
                         mqttClient->publishStatus(
                             "online",
                             FRAMEWORK_VERSION,
@@ -598,12 +595,14 @@ void appWifi(void *param) {
                     mqttClient->loop();
                 }
 
-                handleMqttCommand();
+                // handleMqttCommand();
 
               break;
             }
             case WIFI_APCONNECTED:
             {
+                digitalWrite(LED_AP, HIGH);
+                // handleMqttCommand();
                 if (webServer->isRebootNeeded())
                 {
                     wifiStatus = WIFI_DISCONNECTED;
@@ -652,6 +651,12 @@ void appWifi(void *param) {
                         );
                     }
                 }
+
+                if (mqttClient->isOTARequested()) {
+                    String url = mqttClient->getOTAUrl();
+                    mqttClient->clearOTARequest(); // Reset flag agar tidak loop
+                    performOTA(url);
+                }
                 
                 break;
             }
@@ -660,7 +665,10 @@ void appWifi(void *param) {
         if (WiFi.getMode() == WIFI_AP)
         {
             wifiSetup->loopDns();
+        }else{
+            handleMqttCommand();
         }
+
 
         digitalRead(BUTTON_RESET) == LOW ? mqttClient->_modeCommand = RESTART:false;
         digitalRead(BUTTON_ENABLE_AP) == LOW ? wifiStatus = WIFI_APCONNECTED:false;
@@ -671,7 +679,9 @@ void appWifi(void *param) {
 
 void appSensors(void *param) {
     while (true) {
-        readSensors();
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        if (mqttClient->_modeCommand != OTA_UPDATE) {
+            readSensors();
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
