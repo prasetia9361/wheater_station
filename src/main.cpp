@@ -14,7 +14,7 @@
 #include "ntp_setup.h"
 #include "mqttSetup.h"
 
-#define FRAMEWORK_VERSION "1.2.0"
+#define FRAMEWORK_VERSION "1.2.1"
 #define MQTT_SERVER       "broker.emqx.io"
 #define MQTT_PORT         1883
 #define MQTT_USER         "weather_station"
